@@ -1,0 +1,5 @@
+{
+  "name": "SAMRIDHA'S BOT",
+  "description": "A talking robot with a purplish UI, powered by Gemini API for text-to-speech output of user-provided text.",
+  "requestFramePermissions": []
+}
