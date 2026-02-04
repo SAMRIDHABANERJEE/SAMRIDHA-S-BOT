@@ -1,6 +1,5 @@
 import { GoogleGenAI, Modality } from "@google/genai";
 import { decodeBase64, decodeAudioData, playAudioBuffer } from '../utils/audioUtils';
-// Removed BotStatus import as it won't set status directly
 import React from 'react'; // Needed for React.MutableRefObject
 
 const TTS_SAMPLE_RATE = 24000;
@@ -36,7 +35,15 @@ export async function synthesizeAndPlaySpeech(
   };
 
   try {
+    // Basic check for API_KEY, crucial for debugging in client-side environment
+    if (typeof process === 'undefined' || !process.env || !process.env.API_KEY) {
+      console.error("process.env.API_KEY is not defined. Ensure your environment provides it, or use the API Key Selection mechanism if applicable.");
+      throw new Error("API_KEY is missing from environment. Please select an API key.");
+    }
+
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    
+    console.log("Sending TTS request to Gemini model for text:", text);
     const ttsResponse = await ai.models.generateContent({
       model: 'gemini-2.5-flash-preview-tts',
       contents: [{ parts: [{ text: text }] }],
@@ -49,9 +56,11 @@ export async function synthesizeAndPlaySpeech(
         },
       },
     });
+    console.log("Received TTS response:", ttsResponse);
 
     const base64Audio = ttsResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
     if (base64Audio) {
+      console.log("Received base64 audio data. Length:", base64Audio.length);
       const decodedBytes = decodeBase64(base64Audio);
       const audioBuffer = await decodeAudioData(
         decodedBytes,
@@ -60,12 +69,12 @@ export async function synthesizeAndPlaySpeech(
         TTS_CHANNELS,
       );
 
-      // Signal that audio playback is about to start
       onPlaybackStarted();
       const source = playAudioBuffer(audioBuffer, outputAudioContext, outputGainNode, nextStartTime);
       currentSources.add(source);
       source.addEventListener('ended', () => onSourceEnded(source));
       playbackScheduled = true;
+      console.log("Audio playback scheduled.");
     } else {
       console.warn('No audio data received from TTS for text:', text);
       // If no audio is received, playback logically ends immediately.
@@ -78,8 +87,24 @@ export async function synthesizeAndPlaySpeech(
     // to App.tsx when the last audio source finishes.
     return playbackScheduled;
 
-  } catch (error) {
+  } catch (error: any) { // Type assertion for error to access potential properties
     console.error('Error in Gemini TTS service:', error);
+    if (error.message && error.message.includes("API_KEY is missing")) {
+        console.error("The API key is crucial for API calls. Please ensure it's configured.");
+    }
+    // Log specific error details from GoogleGenAI or network
+    if (error.status) { // This is common for HTTP errors from GoogleGenAI
+        console.error(`Gemini API Error Status: ${error.status}`);
+        console.error(`Gemini API Error Message: ${error.message}`);
+        console.error(`Gemini API Error Details: ${JSON.stringify(error.details)}`);
+    } else if (error.response && error.response.data) { // Another potential error structure for Axios-like errors
+        console.error(`Gemini API Error Response Data:`, error.response.data);
+    } else if (error instanceof Error) {
+        console.error(`General Error: ${error.name}: ${error.message}`);
+    } else {
+        console.error(`Unknown error type:`, error);
+    }
+    
     // If an error occurs and no audio was even scheduled, we still need to
     // ensure cleanup is triggered, as onPlaybackEnded won't be called via source.ended.
     if (!playbackScheduled) {
