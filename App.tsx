@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import ChatWindow from './components/ChatWindow';
-import TextInput from './components/TextInput'; // New component
-import StatusDisplay from './components/StatusDisplay'; // Renamed component
-import { synthesizeAndPlaySpeech } from './services/geminiService'; // Updated service function
+import TextInput from './components/TextInput';
+import StatusDisplay from './components/StatusDisplay';
+import { synthesizeAndPlaySpeech } from './services/geminiService';
 import { ChatMessage, MessageSender, BotStatus } from './types';
 
 // Extend the Window interface to include webkitAudioContext
@@ -33,13 +33,15 @@ const App: React.FC = () => {
 
   const handleSpeechPlaybackStarted = useCallback(() => {
     setIsSpeaking(true);
+    setBotStatus(BotStatus.Speaking); // Set speaking status when playback actually starts
   }, []);
 
   const handleSpeechPlaybackEnded = useCallback(() => {
     setIsSpeaking(false);
-    setIsProcessing(false); // Finished processing and speaking
-    setBotStatus(BotStatus.Idle); // Reset status when done
-    nextStartTimeRef.current = outputAudioContextRef.current?.currentTime || 0; // Reset nextStartTime to current time
+    setIsProcessing(false); // Playback finished, so processing is also done
+    // IMPORTANT: Do NOT reset botStatus to Idle here.
+    // It will be explicitly set to Idle or Error by handleSendMessage based on overall flow.
+    nextStartTimeRef.current = outputAudioContextRef.current?.currentTime || 0;
   }, []);
 
   const handleSendMessage = useCallback(async (text: string) => {
@@ -50,29 +52,36 @@ const App: React.FC = () => {
       return;
     }
 
-    addMessage(MessageSender.User, text); // Add user's message to chat
+    addMessage(MessageSender.User, text);
 
-    setIsProcessing(true); // Indicate that we are now processing the command
-    setBotStatus(BotStatus.Processing);
+    setIsProcessing(true); // Start processing
+    setBotStatus(BotStatus.Processing); // Update bot status
 
     try {
-      await synthesizeAndPlaySpeech(
+      const audioPlayed = await synthesizeAndPlaySpeech(
         text,
         outputAudioContextRef.current,
         outputGainNodeRef.current,
         nextStartTimeRef,
-        (status) => {
-          setBotStatus(status);
-          if (status === BotStatus.Speaking) {
-            handleSpeechPlaybackStarted();
-          }
-        },
-        handleSpeechPlaybackEnded,
+        handleSpeechPlaybackStarted, // Callback for when audio playback starts
+        handleSpeechPlaybackEnded,   // Callback for when audio playback ends
       );
+
+      // If no audio was played (e.g., API returned no audio data),
+      // handleSpeechPlaybackEnded has already been called (which resets isProcessing/isSpeaking).
+      // We explicitly set botStatus to Idle here for this no-audio-played scenario.
+      if (!audioPlayed) {
+        setBotStatus(BotStatus.Idle);
+      }
+      // If audioPlayed is true, handleSpeechPlaybackEnded will eventually be called
+      // via the 'ended' event listener, which will reset isProcessing/isSpeaking.
+      // The botStatus will transition from 'Processing' -> 'Speaking' -> 'Idle' as playback completes.
+      // We don't set Idle here if audioPlayed is true, as handleSpeechPlaybackEnded will signal completion.
+
     } catch (error) {
       console.error('Error synthesizing speech:', error);
-      setBotStatus(BotStatus.Error);
-      handleSpeechPlaybackEnded(); // Ensure status is reset even on error
+      setBotStatus(BotStatus.Error); // Set global error status
+      handleSpeechPlaybackEnded(); // Ensure processing/speaking flags are reset immediately
       addMessage(MessageSender.System, "I'm sorry, I encountered an error while speaking. Please try again.");
     }
   }, [
@@ -98,6 +107,7 @@ const App: React.FC = () => {
     };
   }, [addMessage]);
 
+  // Determine if the input/send button should be disabled
   const isDisabled = isProcessing || isSpeaking;
 
   return (
